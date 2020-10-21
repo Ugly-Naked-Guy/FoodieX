@@ -1,0 +1,138 @@
+---
+title: "FoodieX"
+author: ""
+date: "10/20/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## load packages
+library(VIM)
+library(tidyverse)
+library("esquisse")
+library(caret)
+library(fpc)
+```
+
+## Data Preprocessing
+```{r}
+## load data
+data_raw = read.csv("2020-XTern-DS.csv")
+```
+
+```{r}
+data_type = data_raw %>% 
+  mutate(
+    Average_Cost = as.numeric(substr(Average_Cost, start = 2, stop = 3)),
+    Minimum_Order = as.numeric(substr(Minimum_Order, start = 2, stop = 3)),
+    Rating = as.numeric(Rating),
+    Votes = as.numeric(Votes),
+    Reviews = as.numeric(Reviews),
+    Cook_Time = as.numeric(substr(Cook_Time, start = 1, stop = 3))
+    )%>% 
+  mutate(Num_Cuisines = str_count(Cuisines, ','))
+```
+
+```{r}
+## Check the columns with missing values
+## Calculate missing data percentage of each col
+missing_table = sort(colSums(is.na(data_type))/nrow(data_type), decreasing = TRUE)
+missing_table
+## visualizing the pattern of missing value
+aggr(data_type , prop = FALSE, number = TRUE)
+```
+
+```{r}
+## Remove the column if more than 30% observations are missing. 
+## Fill the missing value with the median of its column. 
+data_nona = data_type %>% 
+  select_if(~sum(is.na(.))/nrow(data_type) < 0.3) %>% 
+  mutate_if(is.numeric, function(x){x = replace_na(x, median(x, na.rm = TRUE))})
+## Check the missing value again
+mean(is.na(data_nona)/nrow(data_nona))
+```
+
+```{r}
+data = data_nona %>% 
+  mutate(Rating_Class = as_factor(case_when(
+                             Rating <3.6 ~ "low",
+                             Rating >=3.6 ~ "high"))
+  )
+```
+
+## Conculsion 1: Identify the trending restaurants with My own scoring algorithm
+The ID of trending restaurants are as follows: ID_1160, ID_6967, ID_6537, ID_7158, ID_4728, ID_7739, ID_981. The reasons are as follows. The average ratings not less than 4.5 with both the number of votes and reviews are more than the medain. Also, not to let the cutomers to wait too long, the cook time should under 60 minutes. Restaurants should also provided more than 3 types of cuisines and the the average cost should be less or equal to $60.
+
+```{r}
+data %>% 
+  filter(Votes> median(Votes),
+         Reviews > median(Reviews),
+         Rating >= 4.5,
+         Num_Cuisines > 3,
+         Cook_Time <= 60,
+         Average_Cost <= 60
+         ) %>% 
+  select(-Latitude, -Longitude)
+```
+
+```{r}
+plot(density(data$Rating), xlab = "rangtings")
+abline(v = median(data$Rating), col = "red")
+```
+
+## Conculsion 2 with Data visualizatoins:
+Restaurant with high ratings usually yake longer to prepare food.
+The number of cuisines do not play an important role in restaurant ratings.
+```{r}
+# cook time vs rating class
+p01 = data %>% 
+  ggplot(aes(x = Cook_Time, col = Rating_Class)) + 
+  geom_density()
+
+# number of cuisines vs rating class
+p02 = data %>% 
+  ggplot(aes(x = Num_Cuisines, fill = Num_Cuisines)) +
+  geom_bar() + 
+  facet_wrap(~Rating_Class)
+gridExtra::grid.arrange(p01, p02, ncol = 1)
+
+```
+
+## Conculsion 3:clustering restaurant locations to figure out the optimized FoodieX pick up zones
+
+The location (Latitude, Longitude) of 10 best pick up zones are list as follows.
+```{r}
+pickup = kmeans(data %>% select(Latitude, Longitude),
+                        centers = 10, nstart = 5)
+pickup$centers
+
+plotcluster(data %>% select(Latitude, Longitude), pickup$cluster)
+```
+
+## Conculsion 4: Estimating cook time based on restaurant info
+Average_Cost, Minimum_Order, Votes, Reviews are significant factors that will affact cook time. 
+
+### Linear model
+```{r}
+cooktime_lm_model = lm(Cook_Time ~ .-Restaurant-Cuisines -Latitude-Longitude -Rating_Class,data = data)
+summary(cooktime_lm_model)
+
+```
+
+### Random Forest Model
+```{r}
+set.seed(42)
+cooktime_rf_model = train(Cook_Time ~ .-Restaurant-Cuisines -Latitude-Longitude -Rating_Class,
+      data = data,
+      trControl = trainControl(method = "oob"),
+      method = "rf")
+cooktime_rf_model$finalModel
+cooktime_rf_model$results
+```
+
